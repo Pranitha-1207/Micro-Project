@@ -1,0 +1,200 @@
+# app.py
+import streamlit as st
+import requests
+import pandas as pd
+
+
+# --- PAGE CONFIG ---
+st.set_page_config(page_title="RentWise Pro", page_icon="📈", layout="wide")
+
+# --- INITIALIZE SESSION STATE ---
+if 'logged_in' not in st.session_state:
+    st.session_state['logged_in'] = False
+if 'page' not in st.session_state:
+    st.session_state['page'] = 'Login'
+
+# --- API URL ---
+API_URL = "http://127.0.0.1:8000" # Base URL of our FastAPI backend
+
+# REPLACE the old show_login_page function with this new one
+def show_login_page():
+    st.title("Welcome to RentWise Pro 📈")
+    
+    with st.form("login_form"):
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+        submit = st.form_submit_button("Login")
+        
+        if submit:
+            # Call the /login API endpoint
+            payload = {"email": email, "password": password}
+            try:
+                response = requests.post(f"{API_URL}/login", json=payload)
+                if response.status_code == 200:
+                    user_data = response.json()
+                    st.session_state['logged_in'] = True
+                    st.session_state['user_email'] = user_data['email']
+                    st.session_state['user_uid'] = user_data['uid']
+                    st.success("Logged in successfully!")
+                    st.rerun()
+                else:
+                    st.error(f"Login failed: {response.json().get('detail')}")
+            except requests.RequestException as e:
+                st.error(f"Could not connect to the server: {e}")
+            
+    if st.button("Don't have an account? Register"):
+        st.session_state['page'] = 'Register'
+        st.rerun()
+
+# REPLACE the old show_register_page function with this new one
+def show_register_page():
+    st.title("Register New Account")
+    with st.form("register_form"):
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+        submit = st.form_submit_button("Register")
+        
+        if submit:
+            # Call the /register API endpoint
+            payload = {"email": email, "password": password}
+            try:
+                response = requests.post(f"{API_URL}/register", json=payload)
+                if response.status_code == 200:
+                    st.success("Registration successful! Please go back to the login page.")
+                else:
+                    st.error(f"Registration failed: {response.json().get('detail')}")
+            except requests.RequestException as e:
+                st.error(f"Could not connect to the server: {e}")
+
+    if st.button("Back to Login"):
+        st.session_state['page'] = 'Login'
+        st.rerun()
+# ============================
+# MAIN APPLICATION LOGIC
+# ============================
+
+def show_main_app():
+    st.sidebar.title(f"Welcome, {st.session_state.get('user_email', '')}!")
+    app_page = st.sidebar.radio("Navigation", ["Rent Predictor", "Prediction History"])
+    
+    if st.sidebar.button("Logout"):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
+        
+    if app_page == "Rent Predictor":
+        render_predictor_page()
+    elif app_page == "Prediction History":
+        render_history_page()
+
+def render_predictor_page():
+    st.title("🧠 Rent Predictor")
+    
+    # --- DATA-DRIVEN ENHANCEMENTS (CONCEPT) ---
+    st.info(" Hypothetical Market Trend: Rents in Mumbai are trending **+3%** over the last quarter.")
+
+    # --- INPUT FORM ---
+    with st.form("prediction_form"):
+        df = pd.read_csv('House_Rent_Dataset.csv') # For dropdowns
+        city = st.selectbox("City", sorted(df['City'].unique()))
+        bhk = st.slider("Bedrooms (BHK)", 1, 6, 2)
+        bathroom = st.slider("Bathrooms", 1, 6, 2)
+        size = st.number_input("Size (Sq. Ft.)", 100, 8000, 1100)
+        furnishing = st.selectbox("Furnishing", sorted(df['Furnishing Status'].unique()))
+        
+        submit_prediction = st.form_submit_button("Predict Rent", use_container_width=True)
+
+    if submit_prediction:
+        payload = {
+            "BHK": bhk, "Size": size, "Bathroom": bathroom,
+            "City": city, "FurnishingStatus": furnishing,
+            "userId": st.session_state['user_uid']
+        }
+        response = requests.post(f"{API_URL}/predict", json=payload)
+        if response.status_code == 200:
+            result = response.json()
+            st.session_state['last_prediction'] = result['predicted_rent']
+            st.session_state['last_payload'] = payload
+        else:
+            st.error(f"Error from API: {response.text}")
+
+    # --- DISPLAY PREDICTION & FEEDBACK LOOP ---
+    if 'last_prediction' in st.session_state:
+        predicted_rent = st.session_state['last_prediction']
+        st.metric("Estimated Monthly Rent", f"₹ {predicted_rent:,.0f}")
+
+        with st.expander("Did you rent this property? Help us improve!"):
+            with st.form("feedback_form"):
+                actual_rent = st.number_input("Enter Actual Rent (₹)", min_value=1000)
+                submit_feedback = st.form_submit_button("Submit Feedback")
+                
+                if submit_feedback:
+                    feedback_payload = {
+                        "userId": st.session_state['user_uid'],
+                        "predicted_rent": predicted_rent,
+                        "actual_rent": actual_rent,
+                        "house_details": st.session_state['last_payload']
+                    }
+                    fb_response = requests.post(f"{API_URL}/submit_feedback", json=feedback_payload)
+                    if fb_response.status_code == 200:
+                        st.success("Thank you! Your feedback helps make our model smarter.")
+                    else:
+                        st.error("Could not submit feedback.")
+
+# =====================================================================
+# REPLACE THE OLD render_history_page FUNCTION IN app.py WITH THIS NEW ONE
+# =====================================================================
+
+def render_history_page():
+    st.title("📜 My Prediction History")
+    
+    # 1. Construct the URL for the API endpoint. We get the user's ID
+    #    from the session state where it was saved during login.
+    history_url = f"{API_URL}/history/{st.session_state['user_uid']}"
+    
+    try:
+        # 2. Make the HTTP GET request to our API. The `requests` library does this.
+        #    We set a timeout of 10 seconds as a good practice.
+        response = requests.get(history_url, timeout=10)
+        
+        # 3. Check if the request was successful. If the API returned an error
+        #    (like 404 Not Found or 500 Server Error), this line will raise an exception.
+        response.raise_for_status()
+        
+        # 4. If successful, parse the JSON data returned by the API.
+        #    The API returns a dictionary like {"history": [...]}, so we get the list.
+        results = response.json().get("history", [])
+        
+        if results:
+            # 5. Process the received data for displaying in a clean table.
+            #    This part is mostly for formatting.
+            display_data = []
+            for item in results:
+                details = item.get('house_details', {})
+                display_data.append({
+                    "Date": pd.to_datetime(item.get('timestamp')).strftime('%Y-%m-%d %H:%M'),
+                    "City": details.get('City'),
+                    "BHK": details.get('BHK'),
+                    "Size": details.get('Size'),
+                    "Predicted Rent (₹)": f"{item.get('prediction', 0):,.0f}"
+                })
+            
+            # 6. Display the formatted data in a Streamlit dataframe.
+            st.dataframe(pd.DataFrame(display_data), use_container_width=True)
+        else:
+            st.info("You have no prediction history yet. Go to the 'Rent Predictor' to make a prediction.")
+            
+    except requests.exceptions.RequestException as e:
+        # 7. If the API call fails for any reason (e.g., server is down, no internet),
+        #    display a user-friendly error message.
+        st.error(f"Could not fetch prediction history from the server. Error: {e}")
+# ============================
+# PAGE ROUTER
+# ============================
+if not st.session_state['logged_in']:
+    if st.session_state['page'] == 'Login':
+        show_login_page()
+    elif st.session_state['page'] == 'Register':
+        show_register_page()
+else:
+    show_main_app()
